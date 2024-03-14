@@ -5,6 +5,65 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
+from .conftest import _fake_repo as _base_fake_repo
+from .conftest import write_file
+
+
+def _fake_repo(tmp_path_factory, config_file, name):
+    repo = _base_fake_repo(tmp_path_factory, config_file, name)
+
+    write_file(
+        repo.path / 'metadata_integration',
+        'manifest.json',
+        """{
+          "manifest_version": "2.0.0",
+          "app_uuid": "15b15f01-b342-4001-89ac-9e92fc4f3234",
+          "app_id": "druid",
+          "display_on_public_website": true,
+          "assets": {
+            "integration": {
+              "metrics": {
+                "prefix": "metadata_integration.",
+                "check": [],
+                "metadata_path": "metadata.csv"
+              }
+            }
+          }
+        }
+""",
+    )
+
+    write_file(
+        repo.path / 'metadata_integration',
+        'metadata.csv',
+        """metric_name,metric_type,interval,unit_name,per_unit_name,description,orientation,integration,short_name,curated_metric
+metadata_integration.metric_b,gauge,,,,My metric B,0,metadata_integration,,
+metadata_integration.metric_a,gauge,,,,My metric A,0,metadata_integration,,
+""",
+    )
+
+    return repo
+
+
+@pytest.fixture
+def fake_repo(
+    tmp_path_factory,
+    config_file,
+):
+    yield _fake_repo(tmp_path_factory, config_file, 'core')
+
+
+@pytest.fixture
+def fake_extras_repo(tmp_path_factory, config_file):
+    yield _fake_repo(tmp_path_factory, config_file, 'extras')
+
+
+@pytest.fixture
+def fake_marketplace_repo(tmp_path_factory, config_file):
+    yield _fake_repo(tmp_path_factory, config_file, 'marketplace')
+
 
 def test_metrics_empty(ddev, repository, helpers):
     metrics_file = repository.path / 'apache' / 'metadata.csv'
@@ -612,6 +671,114 @@ def test_warnings(ddev, repository, helpers):
 
 def test_metrics_passing(ddev, helpers):
     result = ddev('validate', 'metadata', 'postgres')
+
+    assert result.exit_code == 0, result.output
+    assert helpers.remove_trailing_spaces(result.output) == helpers.dedent(
+        """
+        Metrics validation
+
+        Passed: 1
+        """
+    )
+
+
+def test_metrics_ordered(fake_repo, ddev, helpers):
+    write_file(
+        fake_repo.path / "metadata_integration",
+        'metadata.csv',
+        """metric_name,metric_type,interval,unit_name,per_unit_name,description,orientation,integration,short_name,curated_metric
+metadata_integration.metric_a,gauge,,,,My metric A,0,metadata_integration,,
+metadata_integration.metric_b,gauge,,,,My metric B,0,metadata_integration,,
+""",
+    )
+
+    result = ddev('validate', 'metadata', 'metadata_integration')
+
+    assert result.exit_code == 0, result.output
+    assert helpers.remove_trailing_spaces(result.output) == helpers.dedent(
+        """
+        Metrics validation
+
+        Passed: 1
+        """
+    )
+
+
+def test_metrics_not_ordered(fake_repo, ddev, helpers):
+    result = ddev('validate', 'metadata', 'metadata_integration')
+
+    assert result.exit_code == 1, result.output
+    assert helpers.remove_trailing_spaces(result.output) == helpers.dedent(
+        """
+        Metrics validation
+        └── metadata_integration
+            └── metadata_integration/metadata.csv
+
+                metadata_integration: metadata.csv is not sorted by metric name. Run
+                `ddev validate metadata metadata_integration --sync` to sort it.
+
+        Errors: 1
+        """
+    )
+
+
+def test_metrics_not_ordered_sync(fake_repo, ddev, helpers):
+    result = ddev('validate', 'metadata', 'metadata_integration', '--sync')
+
+    assert result.exit_code == 1, result.output
+    assert helpers.remove_trailing_spaces(result.output) == helpers.dedent(
+        """
+        Metrics validation
+        └── metadata_integration
+            └── metadata_integration/metadata.csv
+
+                metadata_integration: metadata.csv is not sorted by metric name. Run
+                `ddev validate metadata metadata_integration --sync` to sort it.
+                Sorting metadata_integration/metadata.csv by metric names
+
+        Errors: 1
+        """
+    )
+
+    result = ddev('validate', 'metadata', 'metadata_integration')
+
+    assert result.exit_code == 0, result.output
+    assert helpers.remove_trailing_spaces(result.output) == helpers.dedent(
+        """
+        Metrics validation
+
+        Passed: 1
+        """
+    )
+
+
+def test_metrics_not_ordered_but_allowed(fake_repo, ddev, helpers):
+    write_file(
+        fake_repo.path / ".ddev",
+        'config.toml',
+        """[overrides.validate.metrics]
+unsorted = [
+    'metadata_integration',
+]
+""",
+    )
+
+    result = ddev('validate', 'metadata', 'metadata_integration')
+
+    assert result.exit_code == 0, result.output
+    assert helpers.remove_trailing_spaces(result.output) == helpers.dedent(
+        """
+        Metrics validation
+
+        Passed: 1
+        """
+    )
+
+
+@pytest.mark.parametrize('repo_fixture', ['fake_extras_repo', 'fake_marketplace_repo'])
+def test_metrics_not_ordered_but_not_in_core(repo_fixture, ddev, helpers, request):
+    request.getfixturevalue(repo_fixture)
+    result = ddev('validate', 'metadata', 'metadata_integration')
 
     assert result.exit_code == 0, result.output
     assert helpers.remove_trailing_spaces(result.output) == helpers.dedent(
