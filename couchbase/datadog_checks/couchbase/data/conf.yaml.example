@@ -52,7 +52,7 @@ instances:
 
     ## @param query_monitoring_url - string - optional - default: http://localhost:8093
     ## Url to get query monitoring stats, available since couchbase 4.5.
-    ## See https://developer.couchbase.com/documentation/server/4.5/tools/query-monitoring.html
+    ## See https://docs.couchbase.com/server/current/tools/query-monitoring.html
     #
     # query_monitoring_url: http://localhost:8093
 
